@@ -1,0 +1,58 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            2f:2e:92:d1:4a:23:b9:da:59:f6:6e:1b:16:0a:fb:8c:e1:17:21:37
+        Signature Algorithm: SM2-with-SM3
+        Issuer: C=CN, ST=LN, L=Shenyang, O=Test Org, OU=Test OU, CN=Test SM2 CA
+        Validity
+            Not Before: Oct 10 22:57:33 2022 GMT
+            Not After : Oct 10 22:57:33 2023 GMT
+        Subject: C=CN, ST=Liaoning, L=Shenyang, O=Tet, OU=Tet, CN=oo/emailAddress=oo@oo.oo
+        Subject Public Key Info:
+            Public Key Algorithm: sm2
+                Public-Key: (256 bit)
+                pub:
+                    04:d4:d8:dd:3a:99:5d:72:34:e4:b9:9a:5d:18:33:
+                    72:1c:09:e1:2b:d7:01:d9:16:7b:8c:09:85:ce:de:
+                    e3:80:4b:3d:38:74:a0:ad:bd:dc:ae:3c:fe:a8:66:
+                    5f:ab:22:79:03:26:6e:95:0e:e0:74:04:73:6f:51:
+                    f9:e6:3b:f0:e6
+                ASN1 OID: SM2
+        X509v3 extensions:
+            X509v3 Subject Key Identifier: 
+                F6:52:D4:54:D4:26:10:46:F6:AA:D3:B4:8C:E6:F7:5A:BC:B0:2A:B3
+            X509v3 Authority Key Identifier: 
+                keyid:C5:8D:C5:AE:FF:32:60:49:9E:52:29:49:54:E5:5C:78:FF:45:B9:74
+                DirName:/C=CN/ST=LN/L=Shenyang/O=Test Org/OU=Test OU/CN=Test SM2 CA
+                serial:E9:64:A4:3A:52:AE:65:5B
+            X509v3 Basic Constraints: critical
+                CA:TRUE, pathlen:1
+            X509v3 Key Usage: 
+                Certificate Sign, CRL Sign
+            X509v3 Issuer Alternative Name: 
+                <EMPTY>
+
+    Signature Algorithm: SM2-with-SM3
+    Signature Value:
+        30:44:02:20:6c:65:b7:d1:9c:ad:38:aa:42:94:d2:99:44:c9:
+        be:c5:a6:e1:5b:e5:3a:61:26:97:eb:ca:62:44:f6:1d:7a:8f:
+        02:20:24:ca:f5:18:dc:46:fd:37:bf:97:d8:b2:50:12:d5:5b:
+        b1:9f:18:40:01:24:06:7a:11:97:30:47:27:5e:c0:eb
+-----BEGIN CERTIFICATE-----
+MIICyzCCAnKgAwIBAgIULy6S0UojudpZ9m4bFgr7jOEXITcwCgYIKoEcz1UBg3Uw
+aDELMAkGA1UEBhMCQ04xCzAJBgNVBAgMAkxOMREwDwYDVQQHDAhTaGVueWFuZzER
+MA8GA1UECgwIVGVzdCBPcmcxEDAOBgNVBAsMB1Rlc3QgT1UxFDASBgNVBAMMC1Rl
+c3QgU00yIENBMB4XDTIyMTAxMDIyNTczM1oXDTIzMTAxMDIyNTczM1owdTELMAkG
+A1UEBhMCQ04xETAPBgNVBAgMCExpYW9uaW5nMREwDwYDVQQHDAhTaGVueWFuZzEM
+MAoGA1UECgwDVGV0MQwwCgYDVQQLDANUZXQxCzAJBgNVBAMMAm9vMRcwFQYJKoZI
+hvcNAQkBFghvb0Bvby5vbzBaMBQGCCqBHM9VAYItBggqgRzPVQGCLQNCAATU2N06
+mV1yNOS5ml0YM3IcCeEr1wHZFnuMCYXO3uOASz04dKCtvdyuPP6oZl+rInkDJm6V
+DuB0BHNvUfnmO/Dmo4HrMIHoMB0GA1UdDgQWBBT2UtRU1CYQRvaq07SM5vdavLAq
+szCBmgYDVR0jBIGSMIGPgBTFjcWu/zJgSZ5SKUlU5Vx4/0W5dKFspGowaDELMAkG
+A1UEBhMCQ04xCzAJBgNVBAgMAkxOMREwDwYDVQQHDAhTaGVueWFuZzERMA8GA1UE
+CgwIVGVzdCBPcmcxEDAOBgNVBAsMB1Rlc3QgT1UxFDASBgNVBAMMC1Rlc3QgU00y
+IENBggkA6WSkOlKuZVswEgYDVR0TAQH/BAgwBgEB/wIBATALBgNVHQ8EBAMCAQYw
+CQYDVR0SBAIwADAKBggqgRzPVQGDdQNHADBEAiBsZbfRnK04qkKU0plEyb7FpuFb
+5TphJpfrymJE9h16jwIgJMr1GNxG/Te/l9iyUBLVW7GfGEABJAZ6EZcwRydewOs=
+-----END CERTIFICATE-----
