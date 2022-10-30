@@ -102,7 +102,12 @@ int http_server_get_asn1_req(const ASN1_ITEM *it, ASN1_VALUE **preq,
 int http_server_send_asn1_resp(BIO *cbio, int keep_alive,
                                const char *content_type,
                                const ASN1_ITEM *it, const ASN1_VALUE *resp);
-
+/*This will be the function called in the case a tiny response is signaled either from the cmd or from an api call to make a request
+* The function receives a cbor structure and encodes it to be sent to the client as a cbor response
+*/
+int http_server_send_cbor_resp(BIO *cbio, int keep_alive,
+                               const char *content_type,
+                               unsigned char *data, size_t len);
 /*-
  * Send a trivial HTTP response, typically to report an error or OK
  * cbio: destination BIO (typically as returned by http_server_get_asn1_req())

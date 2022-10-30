@@ -78,6 +78,9 @@ static char **lookup_serial(CA_DB *db, ASN1_INTEGER *ser);
 static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio,
                         const char *port, int timeout);
 static int send_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp);
+static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp); //This is the function called in the case of sending a CBOR encoded response
+
+
 static char *prog;
 
 #ifdef HTTP_DAEMON
@@ -106,7 +109,7 @@ typedef enum OPTION_choice {
     OPT_RCID,
     OPT_V_ENUM,
     OPT_MD,
-    OPT_MULTI, OPT_PROV_ENUM
+    OPT_MULTI, OPT_PROV_ENUM, OPT_TINY_OCSP //add tinyOCSP option
 } OPTION_CHOICE;
 
 const OPTIONS ocsp_options[] = {
@@ -158,6 +161,7 @@ const OPTIONS ocsp_options[] = {
     {"", OPT_MD, '-', "Any supported digest algorithm (sha1,sha256, ... )"},
 
     OPT_SECTION("Client"),
+    {"tiny", OPT_TINY_OCSP,'-',"Get a tiny CBOR encoded version of the OCSP response"}, //add command line argument option
     {"url", OPT_URL, 's', "Responder URL"},
     {"host", OPT_HOST, 's', "TCP/IP hostname:port to connect to"},
     {"port", OPT_PORT, 'N', "Port to run responder on"},
@@ -252,9 +256,16 @@ int ocsp_main(int argc, char **argv)
     int vpmtouched = 0, badsig = 0, i, ignore_err = 0, nmin = 0, ndays = -1;
     int req_text = 0, resp_text = 0, res, ret = 1;
     int req_timeout = -1;
+
+    //tinyOCSP flags
+    int tiny_response=0; //tiny response flag
+    uint8_t *tiny_respbs=NULL; //pointer to the cbor encoded response byteString
+
     long nsec = MAX_VALIDITY_PERIOD, maxage = -1;
     unsigned long sign_flags = 0, verify_flags = 0, rflags = 0;
     OPTION_CHOICE o;
+
+
 
     if ((reqnames = sk_OPENSSL_STRING_new_null()) == NULL
             || (ids = sk_OCSP_CERTID_new_null()) == NULL
@@ -309,6 +320,12 @@ int ocsp_main(int argc, char **argv)
         case OPT_PROXY:
             opt_proxy = opt_arg();
             break;
+
+        //Set tiny response flag if "-tiny" arg is received
+        case OPT_TINY_OCSP:
+            tiny_response=1;
+            break;
+
         case OPT_NO_PROXY:
             opt_no_proxy = opt_arg();
             break;
@@ -660,6 +677,10 @@ redo_accept:
         res = do_responder(&req, &cbio, acbio, port, req_timeout);
         if (res == 0)
             goto redo_accept;
+        
+        if (res == 3) //3 is a new int return value when a request for tiny response is signaled 
+            tiny_response=1;
+
 
         if (req == NULL) {
             if (res == 1) {
@@ -725,13 +746,50 @@ redo_accept:
                            rsign_md, rsign_sigopts, rother, rflags, nmin, ndays,
                            badsig, resp_certid_md);
         if (cbio != NULL)
-            send_ocsp_response(cbio, resp);
+        {
+
+          if (tiny_response) 
+             {
+                send_tiny_ocsp_response(cbio, resp);
+                tiny_response=0; //clear the flag for the next comms
+             }
+         else
+                send_ocsp_response(cbio, resp); //otherwise send normal DER encoded ASN1 response
+        }
     } else if (host != NULL) {
 #ifndef OPENSSL_NO_SOCK
-        resp = process_responder(req, host, port, path, opt_proxy, opt_no_proxy,
-                                 use_ssl, headers, req_timeout);
-        if (resp == NULL)
-            goto end;
+        if(tiny_response){
+            tiny_respbs=process_tiny_responder(req, host, port, path, opt_proxy, opt_no_proxy,
+                                  use_ssl, headers, req_timeout);
+            if (tiny_respbs==NULL)
+              {
+                 printf("failed to reach OCSP Responder\n");
+                 goto end;
+              }   
+             
+             //Just some logic to make sure things work for now
+             int tinyresp_len=8;
+             int i=0;
+            
+             while (tinyresp_len)
+             {
+                 printf("%x ",tiny_respbs[i]);
+                 tinyresp_len--;
+                 i++;
+             }
+     
+             printf("\n");
+             goto end;//There is more cleaning required but it's fine for now
+ 
+        }
+         else
+        {
+
+            resp = process_responder(req, host, port, path, opt_proxy, opt_no_proxy,
+                                     use_ssl, headers, req_timeout);
+            if (resp == NULL)
+                goto end;
+        }
 #else
         BIO_printf(bio_err,
                    "Error creating connect BIO - sockets not supported\n");
@@ -1225,7 +1283,60 @@ static int send_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp)
 #endif
 }
 
+static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp)
+{
+    //some testbyteString
+    uint8_t testCbor[]={0x68,0x68,0x65,0x6C,0x6C,0x6F,'\0','\0'};
+    size_t len_testCbor=sizeof(testCbor);
+
 #ifndef OPENSSL_NO_SOCK
+    return http_server_send_cbor_resp(cbio,
+                                      0 /* no keep-alive */,
+                                      "application/ocsp-tiny-response",
+                                      testCbor,
+                                      len_testCbor);
+#else
+    BIO_printf(bio_err,
+               "Error sending OCSP response - sockets not supported\n");
+    return 0;
+#endif
+}
+
+
+#ifndef OPENSSL_NO_SOCK
+
+uint8_t *process_tiny_responder(OCSP_REQUEST *req, const char *host,
+                                  const char *port, const char *path,
+                                  const char *proxy, const char *no_proxy,
+                                  int use_ssl, STACK_OF(CONF_VALUE) *headers,
+                                  int req_timeout)
+{
+     SSL_CTX *ctx = NULL;
+     uint8_t *resp = NULL;
+ 
+     if (use_ssl == 1) {
+         ctx = SSL_CTX_new(TLS_client_method());
+         if (ctx == NULL) {
+             BIO_printf(bio_err, "Error creating SSL context.\n");
+             goto end;
+         }
+     }
+ 
+     resp = 
+         app_http_post_cbor(host, port, path, proxy, no_proxy,
+                            ctx, headers, "application/ocsp-request-tiny", //set content type for signaling
+                            (ASN1_VALUE *)req, ASN1_ITEM_rptr(OCSP_REQUEST),
+                            "application/ocsp-tiny-response",
+                            req_timeout, ASN1_ITEM_rptr(OCSP_RESPONSE));
+ 
+     if (resp == NULL)
+         BIO_printf(bio_err, "Error querying OCSP responder\n");
+ 
+  end:
+     SSL_CTX_free(ctx);
+     return resp;
+}
+
 OCSP_RESPONSE *process_responder(OCSP_REQUEST *req, const char *host,
                                  const char *port, const char *path,
                                  const char *proxy, const char *no_proxy,

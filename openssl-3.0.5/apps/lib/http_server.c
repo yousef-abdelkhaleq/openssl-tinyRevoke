@@ -460,6 +460,17 @@ int http_server_get_asn1_req(const ASN1_ITEM *it, ASN1_VALUE **preq,
             else if (OPENSSL_strcasecmp(value, "close") == 0)
                 *found_keep_alive = 0;
         }
+        //check for tiny response request via content type
+        if (OPENSSL_strcasecmp(key, "Content-type") == 0)
+        {
+            if (OPENSSL_strcasecmp(value, "application/ocsp-request-tiny") == 0)
+            {
+                printf("Received Request for Tiny(Cbor) Response\n");
+                ret=3;//signal for tiny request
+            }
+
+        }
+
     }
 
 # ifdef HTTP_DAEMON
@@ -516,6 +527,23 @@ int http_server_send_asn1_resp(BIO *cbio, int keep_alive,
                          content_type,
                          ASN1_item_i2d(resp, NULL, it)) > 0
             && ASN1_item_i2d_bio(it, cbio, resp) > 0;
+
+    (void)BIO_flush(cbio);
+    return ret;
+}
+
+int http_server_send_cbor_resp(BIO *cbio, int keep_alive,
+                               const char *content_type,
+                               unsigned char* data, size_t len)
+{
+    
+    int ret = BIO_printf(cbio, HTTP_1_0" 200 OK\r\n%s"
+                         "Content-type: %s\r\n"
+                         "Content-Length: %d\r\n\r\n",
+                         keep_alive ? "Connection: keep-alive\r\n" : "",
+                         content_type,
+                         len) > 0
+            &&BIO_write(cbio,data,len) > 0; //write the byteString to the bio
 
     (void)BIO_flush(cbio);
     return ret;

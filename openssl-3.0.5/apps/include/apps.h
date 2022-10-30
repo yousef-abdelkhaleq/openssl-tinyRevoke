@@ -185,6 +185,12 @@ OCSP_RESPONSE *process_responder(OCSP_REQUEST *req, const char *host,
                                  const char *proxy, const char *no_proxy,
                                  int use_ssl, STACK_OF(CONF_VALUE) *headers,
                                  int req_timeout);
+
+uint8_t *process_tiny_responder(OCSP_REQUEST *req, const char *host,
+                                 const char *port, const char *path,
+                                 const char *proxy, const char *no_proxy,
+                                 int use_ssl, STACK_OF(CONF_VALUE) *headers,
+                                 int req_timeout);
 # endif
 
 /* Functions defined in ca.c and also used in ocsp.c */
@@ -292,6 +298,19 @@ ASN1_VALUE *app_http_post_asn1(const char *host, const char *port,
                                ASN1_VALUE *req, const ASN1_ITEM *req_it,
                                const char *expected_content_type,
                                long timeout, const ASN1_ITEM *rsp_it);
+
+//TinyOCSP function declarations-----------------
+uint8_t *cbor_item_d2i_bio(BIO *in);
+int cbor_d2i_read_bio(BIO *in, BUF_MEM **pb);
+uint8_t *app_http_post_cbor(const char *host, const char *port,
+                               const char *path, const char *proxy,
+                               const char *no_proxy, SSL_CTX *ctx,
+                               const STACK_OF(CONF_VALUE) *headers,
+                               const char *content_type,
+                               ASN1_VALUE *req, const ASN1_ITEM *req_it,
+                               const char *expected_content_type,
+                               long timeout, const ASN1_ITEM *rsp_it);
+//-----------------------------------------------
 # endif
 
 # define EXT_COPY_NONE   0
