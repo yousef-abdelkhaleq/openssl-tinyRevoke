@@ -56,6 +56,99 @@ pid_t fork(void)
 /* Maximum leeway in validity period: default 5 minutes */
 #define MAX_VALIDITY_PERIOD    (5 * 60)
 
+//Tiny specific declarations
+#define TAG_ZERO   0xC0
+#define TEXT_TAG   0x60
+#define BS_SMALL   0x40
+#define CBOR_ARRAY 0x80
+
+#define noncesize 32
+#define sn_size 2
+#define sha_1_hsize 20
+
+#define good_cert 1
+#define revoked_cert 2
+
+#define one_byte_n_bs 0x58
+#define responseData_size 201
+
+struct OCSP_CBOR_CERTID{
+
+    uint8_t hashAlg;
+    uint8_t issuer_h[sha_1_hsize+1]; //+2 for cbor encoding bytes
+    uint8_t issuer_kh[sha_1_hsize+1];
+    uint8_t sn[sn_size+1];
+};
+
+typedef struct OCSP_CBOR_CERTID OCSP_CBOR_CERTID;
+struct OCSP_CBOR_RESPONSE{
+    uint8_t responseType;
+    uint8_t *responderID;
+    uint8_t *producedat;
+    uint8_t nonce[noncesize+2];
+    OCSP_CBOR_CERTID certID;
+    uint8_t certStatus;
+    uint8_t signaturVal[64+2];
+    uint8_t signatureAlg;
+};
+typedef struct OCSP_CBOR_RESPONSE OCSP_CBOR_RESPONSE;
+
+//function to convert string to byte array
+void string2ByteArray(char* input, uint8_t* output)
+{
+    int loop;
+    int i;
+    
+    loop = 0;
+    i = 0;
+    
+    while(input[loop] != '\0')
+    {
+        output[i++] = input[loop++];
+    }
+}
+
+void printByteArray(uint8_t *bytestring,size_t len)
+{
+    int i=0;
+    while (len)
+    {
+        printf("%02x ",bytestring[i]);
+        len--;
+        i++;
+    }
+    
+}
+
+
+
+OCSP_CBOR_RESPONSE* tiny_response_item()
+{
+   static const OCSP_CBOR_CERTID   client_id={
+    0,
+    "",
+    "",
+    ""};
+    //initialise members
+   static OCSP_CBOR_RESPONSE tiny_response_it={
+      15,
+      NULL,
+      NULL,
+      "",
+      client_id,
+      0,
+      "",
+      0
+     };
+
+    OCSP_CBOR_RESPONSE *ptr_to_resp;
+    ptr_to_resp=&tiny_response_it;
+
+    return ptr_to_resp;
+
+
+}
+
 static int add_ocsp_cert(OCSP_REQUEST **req, X509 *cert,
                          const EVP_MD *cert_id_md, X509 *issuer,
                          STACK_OF(OCSP_CERTID) *ids);
@@ -78,7 +171,9 @@ static char **lookup_serial(CA_DB *db, ASN1_INTEGER *ser);
 static int do_responder(OCSP_REQUEST **preq, BIO **pcbio, BIO *acbio,
                         const char *port, int timeout);
 static int send_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp);
-static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp); //This is the function called in the case of sending a CBOR encoded response
+static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp, X509* issuer, char* rkeyfile, X509* cert); //This is the function called in the case of sending a CBOR encoded response
+uint8_t *OCSP_convert_to_tiny(OCSP_RESPONSE* resp, X509* issuer, char* rkeyfile, X509 *cert);
+
 
 
 static char *prog;
@@ -750,7 +845,7 @@ redo_accept:
 
           if (tiny_response) 
              {
-                send_tiny_ocsp_response(cbio, resp);
+                send_tiny_ocsp_response(cbio, resp, issuer,rkeyfile,cert);
                 tiny_response=0; //clear the flag for the next comms
              }
          else
@@ -768,17 +863,11 @@ redo_accept:
               }   
              
              //Just some logic to make sure things work for now
-             int tinyresp_len=8;
-             int i=0;
-            
-             while (tinyresp_len)
-             {
-                 printf("%x ",tiny_respbs[i]);
-                 tinyresp_len--;
-                 i++;
-             }
-     
+             size_t tinyresp_len=tiny_respbs[0]+((tiny_respbs[1]&0xf0)*4096)+((tiny_respbs[1]&0x0f)*256);
+             printf("Tiny Response including ECDSA-p256 Signature:\n");
+             printByteArray(tiny_respbs+2,tinyresp_len-2);
              printf("\n");
+
              goto end;//There is more cleaning required but it's fine for now
  
         }
@@ -1283,18 +1372,340 @@ static int send_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp)
 #endif
 }
 
-static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp)
+uint8_t *OCSP_convert_to_tiny(OCSP_RESPONSE* resp,X509* issuer, char* rkeyfile, X509 *cert)
 {
-    //some testbyteString
-    uint8_t testCbor[]={0x68,0x68,0x65,0x6C,0x6C,0x6F,'\0','\0'};
-    size_t len_testCbor=sizeof(testCbor);
+    OCSP_BASICRESP *bs = NULL;
+    EVP_MD *cert_id_md = NULL;
+    const ASN1_OCTET_STRING *pid;
+    const X509_NAME *pname;
+    int  status;
+    int  reason;
+    ASN1_GENERALIZEDTIME *revtime;
+    ASN1_GENERALIZEDTIME *thisupd;
+    ASN1_GENERALIZEDTIME *nextupd;
+    const ASN1_GENERALIZEDTIME *producedat;
+    EVP_PKEY *rkey = NULL;
+    EVP_MD_CTX *mdctx = NULL; //create a message digest context
+    char *passinarg=NULL, *passin=NULL;
+    uint8_t *sig;
+
+    STACK_OF(X509) *issuers = NULL;
+
+
+
+    //Certificate paths
+    char *CAfile="/usr/lib/ssl/demoCA/certs/ca.pem"; 
+    char *respkeyfile="/usr/lib/ssl/ocsp_ec.key";
+    char *client_certfile="/usr/lib/ssl/client.pem";
+
+    cert = load_cert(client_certfile, FORMAT_UNDEF, "certificate");
+    if (cert == NULL)
+        {
+            printf("failed to load client cert\n");
+            return NULL;
+        }
+    
+    issuer = load_cert(CAfile, FORMAT_UNDEF, "issuer certificate");
+    if (issuer == NULL)
+        return NULL;
+    if (issuers == NULL) {
+        if ((issuers = sk_X509_new_null()) == NULL)
+            return NULL;
+    }
+    //add issuer to issuers stack
+    if (!sk_X509_push(issuers, issuer))
+        return NULL;
+
+
+    if (issuers == NULL) {
+        if ((issuers = sk_X509_new_null()) == NULL)
+            return NULL;
+    }
+    //add issuer to issuers stack
+    if (!sk_X509_push(issuers, issuer))
+        return NULL;
+    unsigned long verify_flags;
+    verify_flags |= OCSP_TRUSTOTHER;
+
+     if (cert_id_md == NULL)
+        cert_id_md = (EVP_MD *)EVP_sha1();
+    char* outfile=NULL;
+    BIO* out;
+
+
+    //OCSP_response_get1_basic() decodes and returns the OCSP_BASICRESP structure contained in resp.
+    bs = OCSP_response_get1_basic(resp);
+    if (bs == NULL) {
+        printf("failed to parse response\n");
+        return NULL;
+    }
+    OCSP_CBOR_RESPONSE *tiny_resp;
+    tiny_resp=tiny_response_item(); //get ptr to cbor struct
+
+
+    const OCSP_BASICRESP* bs_const=bs;
+
+    //get responderID---------------------
+    int err= OCSP_resp_get0_id(bs_const,&pid,&pname);
+    if(!err)
+        return NULL;
+    char *name=X509_NAME_oneline(pname, NULL, 0);
+    tiny_resp->responderID= malloc(strlen(name)+2); //+2 bytes for cbor encoding
+    uint8_t *temp=tiny_resp->responderID;
+    *temp=one_byte_n_bs;
+    temp++;
+    *temp=strlen(name);
+    temp++;
+    string2ByteArray (name,temp);
+    // printf("responderID:");      
+    // printByteArray(tiny_resp->responderID,strlen(tiny_resp->responderID)); 
+    // printf("\n");
+    //---------------------------------------
+
+    
+    //get client id------------------------------------
+    STACK_OF(X509) *resp_certs;
+    OCSP_CERTID *client_id = OCSP_cert_to_id(cert_id_md, cert, issuer);
+    // int clientId_idx=OCSP_resp_find(bs,client_id,-1); //get index 
+
+    // OCSP_SINGLERESP *clientidStruct=OCSP_resp_get0(bs,clientId_idx);
+    // OCSP_SINGLERESP_get0_id
+    ASN1_OCTET_STRING *piNameHash; ASN1_OBJECT *pmd; ASN1_OCTET_STRING *pikeyHash; ASN1_INTEGER *pserial;
+    OCSP_id_get0_info(&piNameHash,&pmd,&pikeyHash,&pserial,client_id);
+    int serial_len= pserial->length;
+    temp=tiny_resp->certID.sn;
+    *temp=BS_SMALL+serial_len;
+    temp++;
+    memcpy(temp, pserial->data, serial_len);
+    // printf("Serial:");
+    // printByteArray(tiny_resp->certID.sn,serial_len+1);
+    // printf("\n");
+
+    temp=tiny_resp->certID.issuer_kh;
+    *temp=BS_SMALL+sha_1_hsize;
+    temp++;
+    memcpy(temp, pikeyHash->data, sha_1_hsize);
+    // printf("issuerKeyHash:");
+    // printByteArray(tiny_resp->certID.issuer_kh,sha_1_hsize+1);
+    // printf("\n");
+
+    temp=tiny_resp->certID.issuer_h;
+    *temp=BS_SMALL+sha_1_hsize;
+    temp++;
+
+    memcpy(temp, piNameHash->data, sha_1_hsize);
+    // printf("issuerHash:");
+    // printByteArray(tiny_resp->certID.issuer_h,sha_1_hsize+1);
+    // printf("\n");
+
+    tiny_resp->certID.hashAlg=1; //not worrying about parsing this one now
+    // printf("hashAlg:%u (sha1)",tiny_resp->certID.hashAlg);
+    // printf("\n");
+    //------------------------------------------------------------
+
+
+    // get certStatus--------------------------------------------
+    if(!OCSP_resp_find_status(bs, client_id, &status,
+                      &reason,
+                      &revtime,
+                      &thisupd,
+                      &nextupd))
+        return NULL;
+    if (status==V_OCSP_CERTSTATUS_GOOD) //the status is an integer constant and the pointer just points to one of them
+        {
+            tiny_resp->certStatus=good_cert;
+            // printf("certStatus:%u (Good)\n",tiny_resp->certStatus);
+        }
+    else if(status==V_OCSP_CERTSTATUS_REVOKED)
+        {
+            tiny_resp->certStatus=revoked_cert;
+            // printf("certStatus:%u (Revoked)\n",tiny_resp->certStatus);
+        }
+    //-----------------------------------------------------------
+
+    //get producedAt
+    // out = bio_open_default(outfile, 'w', FORMAT_TEXT); //maybe can have this as a bio and read from the bio
+    // if(out==NULL)
+    //     printf("failed to open file\n");
+    producedat= OCSP_resp_get0_produced_at(bs);
+    struct tm producedat_struct;
+    err=ASN1_TIME_to_tm(producedat,&producedat_struct);
+  
+
+    if (!err)
+        return NULL;
+
+    outfile=malloc(25);
+    sprintf(outfile,"%04d-%2d-%02dT%02d:%02d:%02dZ",producedat_struct.tm_year+1900,producedat_struct.tm_mon+1,producedat_struct.tm_mday,producedat_struct.tm_hour,producedat_struct.tm_min,producedat_struct.tm_sec);
+
+    tiny_resp->producedat= malloc(22);
+    temp=tiny_resp->producedat;
+    *temp=TAG_ZERO;
+    temp++;
+    *temp=strlen(outfile)+TEXT_TAG;
+    temp++;
+    string2ByteArray (outfile,temp);
+    // printf("producedAt:");
+    // printByteArray(tiny_resp->producedat,strlen(tiny_resp->producedat));  
+    // printf("\n");
+    //----------------------------------------------------------
+
+    //get nonce-------------------------------------------------
+    int resp_idx;
+    X509_EXTENSION *resp_ext;
+    //get idx for nonce 
+    resp_idx = OCSP_BASICRESP_get_ext_by_NID(bs, NID_id_pkix_OCSP_Nonce, -1);  
+    resp_ext = OCSP_BASICRESP_get_ext(bs, resp_idx); //get the extension
+    //get the octet string
+    ASN1_OCTET_STRING *resp_nonce; 
+    resp_nonce=X509_EXTENSION_get_data(resp_ext);
+    uint8_t *nonce_charString =resp_nonce->data;
+    // int nonce_len= resp_nonce->length;
+    temp=tiny_resp->nonce;
+    *temp=one_byte_n_bs;
+    temp++;
+    *temp=noncesize;
+    temp++;
+    memcpy(temp, nonce_charString+2, noncesize); //+2 to remove previous encoding
+    // printf("nonce:");
+    // printByteArray(tiny_resp->nonce,noncesize+2);
+    // printf("\n");
+    //-------------------------------------------------------
+
+    //add response type (this is just an arbitrary value for this scope)
+    tiny_resp->responseType=1;
+
+    //we need to allocate 200 bytes mem for our responseData
+    uint8_t * responseData=malloc(responseData_size); //remember to free all my mallocs
+    size_t responseData_len=0;
+
+    // response_type: unsigned int
+    uint8_t *walk=responseData+2; //walk is gonna traverse //leave two bytes for bytestring encoding
+
+    *walk=tiny_resp->responseType; //we know that's 1 byte representable
+    walk++; //increment ptr
+    responseData_len++;
+
+    // responderID:   byteString
+    memcpy(walk,tiny_resp->responderID,strlen(tiny_resp->responderID));
+    walk+=strlen(tiny_resp->responderID); //move len respID bytes
+    responseData_len+=strlen(tiny_resp->responderID);
+    
+    
+    // producedAt:    time with tag 0
+    memcpy(walk,tiny_resp->producedat,strlen(tiny_resp->producedat));
+    walk+=strlen(tiny_resp->producedat);
+    responseData_len+=strlen(tiny_resp->producedat);
+    
+
+    // nonce:         bytestring
+    memcpy(walk,tiny_resp->nonce,sizeof(tiny_resp->nonce));
+    walk+=sizeof(tiny_resp->nonce);
+    responseData_len+=sizeof(tiny_resp->nonce);
+  
+    // certID:        CBOR map
+    *walk=CBOR_ARRAY+4; //add array encoding for 4 items
+    walk++;
+    responseData_len++;
+    *walk=tiny_resp->certID.hashAlg;
+    walk++;
+    responseData_len++;
+    memcpy(walk,tiny_resp->certID.issuer_h,sizeof(tiny_resp->certID.issuer_h));
+    walk+=sizeof(tiny_resp->certID.issuer_h);
+    responseData_len+=sizeof(tiny_resp->certID.issuer_h);
+    memcpy(walk,tiny_resp->certID.issuer_kh,sizeof(tiny_resp->certID.issuer_kh));
+    walk+=sizeof(tiny_resp->certID.issuer_kh);
+    responseData_len+=sizeof(tiny_resp->certID.issuer_kh);
+    memcpy(walk,tiny_resp->certID.sn,sizeof(tiny_resp->certID.sn));
+    walk+=sizeof(tiny_resp->certID.sn);
+    responseData_len+=sizeof(tiny_resp->certID.sn);
+
+    // cert status:   unsigned int
+    *walk=tiny_resp->certStatus;
+    walk++;
+    responseData_len++;
+
+    //add byte string encoding so that you sign the length of the response as well
+    walk=responseData; //go to head
+    *walk=one_byte_n_bs;
+    walk++;
+    *walk=responseData_len;
+    // printf("response data:");
+    // printByteArray(responseData,responseData_len+2);
+    // printf("\n");
+
+    //Sign responseData
+   
+    rkey = load_key(respkeyfile, FORMAT_UNDEF, 0, passin, NULL,
+                        "responder private key");
+    if (rkey == NULL) printf("Failed to load rkey!!\n");
+
+    /* Create the Message Digest Context */
+    if(!(mdctx = EVP_MD_CTX_create())) printf("Failed to create Message Digest Context\n");
+    /* Initialise the DigestSign operation - SHA-256 has been selected as the message digest function in this example */
+    if(1 != EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, rkey)) printf("Failed to initialise signing op\n");
+    /* Call update with the message */
+    if(1 != EVP_DigestSignUpdate(mdctx, responseData, responseData_len+2)) printf("Signing Failed!\n"); //+2 to include cbor bytestring encoding
+    /* Finalise the DigestSign operation */
+    /* First call EVP_DigestSignFinal with a NULL sig parameter to obtain the length of the
+     * signature. Length is returned in slen */
+    size_t slen=0;
+    if(1 != EVP_DigestSignFinal(mdctx, NULL, &slen)) printf("failed to get signatureLen\n");
+    // printf("Signature Length:%ld\n",slen); //72 bytes because DER encoding adds 8 bytes
+    //mbedtls also deals with DER encoded signatures
+    /* Allocate memory for the signature based on size in slen */
+    if(!(sig = malloc(slen+2))) printf("Failed to allocate mem for sig\n"); //+2 for bytestring encoding
+    /* Obtain the signature */
+    uint8_t *sig_noenc=sig;
+    sig_noenc+=2; //leave room for encoding
+    if(1 != EVP_DigestSignFinal(mdctx, sig_noenc, &slen)) printf("Failed to obtain signature value\n");
+    sig_noenc=sig;
+    *sig_noenc=one_byte_n_bs; //byte string header
+    sig_noenc++;
+    *sig_noenc=slen;
+
+
+    // printf("SignatureVal:");
+    // printByteArray(sig,slen+2);
+    // printf("\n");
+
+    size_t tinyresp_total_len=2+2+responseData_len+2+slen+1;
+
+    uint8_t *signed_tinyResponse=malloc(tinyresp_total_len); //total_len[2]-cborBytestring_header[2]-responseData[responseData_len]-cborBytestring_header[2]-signature[slen]+sigAlg[1] 
+    walk=signed_tinyResponse;
+    uint16_t *walk_16;
+    walk_16=(uint16_t*)signed_tinyResponse;
+    *walk_16=tinyresp_total_len;
+    walk+=2;
+    memcpy(walk,responseData,responseData_len+2);
+    walk=walk+2+responseData_len;
+    memcpy(walk,sig,slen+2);
+    walk=walk+2+slen;
+    *walk=3; //some label for the sigalg 
+   
+    //free everything else
+
+   
+    return signed_tinyResponse;      
+
+}
+
+static int send_tiny_ocsp_response(BIO *cbio, const OCSP_RESPONSE *resp, X509* issuer, char *rkeyfile, X509* cert)
+{   
+    //convert resp to the tiny OCSP Structure
+    if (rkeyfile==NULL)
+        *rkeyfile="/usr/lib/ssl/ocsp_ec.key"; //make sure to change this to the ocsp responder key path
+    uint8_t *signed_tiny_resp=OCSP_convert_to_tiny(resp, issuer, rkeyfile,cert);
+    size_t signed_tiny_resp_len=signed_tiny_resp[0]+((signed_tiny_resp[1]&0xf0)*4096)+((signed_tiny_resp[1]&0x0f)*256);
+    printf("Sending Signed TinyOCSP Response.\n");
+
 
 #ifndef OPENSSL_NO_SOCK
     return http_server_send_cbor_resp(cbio,
                                       0 /* no keep-alive */,
                                       "application/ocsp-tiny-response",
-                                      testCbor,
-                                      len_testCbor);
+                                      signed_tiny_resp,
+                                      signed_tiny_resp_len);
 #else
     BIO_printf(bio_err,
                "Error sending OCSP response - sockets not supported\n");

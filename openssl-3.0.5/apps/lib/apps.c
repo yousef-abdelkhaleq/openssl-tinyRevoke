@@ -2595,31 +2595,35 @@ ASN1_VALUE *app_http_post_asn1(const char *host, const char *port,
     return res;
 }
 
-
- #define HEADER_SIZE 8
  int cbor_d2i_read_bio(BIO *in, BUF_MEM **pb)
  {
      //this function will go through mem and make sure that the cbor encoding is as we want it with all the types in correct order
      BUF_MEM *b;
      int i;
-     size_t want = HEADER_SIZE;
+     size_t want = 2; //first we want two bytes
      size_t len = 0;
  
      b = BUF_MEM_new();
  
-   
- 
-     if (!BUF_MEM_grow_clean(b, len + want)) {
+    //first read first two bytes to get the size of the response
+    if (!BUF_MEM_grow_clean(b, len + want)) {
                 printf("MEM ALLOC FAILED\n");
-             }
-     i = BIO_read(in, &(b->data[len]), 8);
-     printf("read %i bytes\n",i);  
+       }
+     i = BIO_read(in, &(b->data[len]), want);
      len += i;
- 
+    // update the want
+    want=b->data[0]+((b->data[1]&0xf0)*4096)+((b->data[1]&0x0f)*256);
+    if (!BUF_MEM_grow_clean(b, len + want)) {
+                printf("MEM ALLOC FAILED\n");
+            }
+    //then read the rest of the response
+    i = BIO_read(in, &(b->data[len]), want);
+    
      *pb = b;
      return i;
  
- }
+ 
+}
  
  uint8_t *cbor_item_d2i_bio(BIO *in)                          
  {
@@ -2632,9 +2636,9 @@ ASN1_VALUE *app_http_post_asn1(const char *host, const char *port,
          return NULL;
      len = cbor_d2i_read_bio(in, &b);
      if (len < 0)
-         printf("problemmm\n");
+         printf("problem reading bio!\n");
      p = (unsigned char *)b->data;
-     return p; //we also want the length //so maybe encode into a byte string by adding length in cbor byte string notation
+     return p;
  }
  
  
@@ -2673,6 +2677,7 @@ uint8_t *app_http_post_cbor(const char *host, const char *port,
 
      BIO_free(req_mem);
      res = cbor_item_d2i_bio(rsp);
+     return res;
 }
 
 
