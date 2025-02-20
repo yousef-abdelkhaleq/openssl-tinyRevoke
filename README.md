@@ -1,6 +1,6 @@
-# Openssl-tinyOCSP
+# Openssl-tinyRevoke
 
-Openssl-tinyOCSP adds the functionality to request a C509 profiled CBOR encoded OCSP response (TinyOCSP response). The implementation aims to support acquiring and processing Certificate Revocation information in Resource Constrained Environments.
+Openssl-tinyRevoke adds the functionality to request a C509 profiled CBOR encoded OCSP response (tinyRevoke response). The implementation aims to support acquiring and processing Certificate Revocation information in Resource Constrained Environments.
 
 ## Installation
 The steps below show how to install the repo's version of openssl without it affecting a system installation of openssl.
